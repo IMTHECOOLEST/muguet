@@ -1,0 +1,100 @@
+name: Build iOS .ipa
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master, develop ]
+  workflow_dispatch:
+    inputs:
+      free_account:
+        description: 'Build with free Apple developer account'
+        required: false
+        default: 'false'
+        type: boolean
+
+env:
+  RUST_BACKTRACE: 1
+  RUSTFLAGS: '--remap-path-prefix=$HOME=/home --remap-path-prefix=$PWD=/muguet'
+
+jobs:
+  build-ios:
+    name: Build iOS IPA
+    runs-on: macos-latest
+    timeout-minutes: 120
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.1
+          targets: aarch64-apple-ios
+
+      - name: Setup Rust for iOS
+        run: |
+          rustup toolchain install 1.98.1
+          rustup target add aarch64-apple-ios --toolchain 1.98.1
+
+      - name: Setup Xcode
+        run: |
+          sudo xcode-select --reset
+          sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+
+      - name: Install dependencies
+        run: |
+          brew install xcodegen
+
+      - name: Download game files
+        run: |
+          # This is a placeholder - you need to add your own game.zip download logic
+          # Options:
+          # 1. Upload game.zip as a GitHub release and download from there
+          # 2. Store it in a private artifact and download via GitHub Actions
+          # 3. Use a secret URL to download from your own server
+          echo "⚠️  Game files (game.zip) need to be provided"
+          echo "    Set up one of the following methods:"
+          echo "    - Add game.zip to GitHub releases"
+          echo "    - Store in Actions artifact cache"
+          echo "    - Provide download URL via secret"
+          
+          # Example: Download from GitHub releases
+          # wget https://github.com/c22dev/muguet/releases/download/game-files/game.zip
+
+      - name: Build for iOS (Free Account)
+        if: github.event.inputs.free_account == 'true' || github.event_name != 'workflow_dispatch'
+        run: |
+          FREE=1 BUNDLE_ID="ch.cclerc.muguet.ios" ./make-ios.sh game.zip --ipa
+        continue-on-error: true
+
+      - name: Build for iOS (Paid Account)
+        if: github.event.inputs.free_account != 'true' && github.event_name == 'workflow_dispatch'
+        run: |
+          TEAM="${{ secrets.APPLE_TEAM_ID }}" ./make-ios.sh game.zip --install
+        continue-on-error: true
+
+      - name: Upload IPA artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Muguet.ipa
+          path: build/Muguet.ipa
+          retention-days: 30
+
+      - name: Create Release with IPA
+        if: startsWith(github.ref, 'refs/tags/') && success()
+        uses: softprops/action-gh-release@v1
+        with:
+          files: build/Muguet.ipa
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Notify build completion
+        if: always()
+        run: |
+          echo "Build Status: ${{ job.status }}"
+          if [ -f "build/Muguet.ipa" ]; then
+            echo "IPA Size: $(du -h build/Muguet.ipa | cut -f1)"
+          fi
